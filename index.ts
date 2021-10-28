@@ -1,5 +1,5 @@
 export interface Callback<T> {
-  (key: string, value: T | undefined): void;
+  (key: string, value: T | undefined, status: string | undefined): void;
 }
 
 export type MaybeStringOrArray = string | string[] | undefined;
@@ -15,14 +15,14 @@ export default class DAG<T> {
   ) {
     if (!key) throw new Error("argument `key` is required");
     let vertices = this._vertices;
-    let v = vertices.add(key);
+    let v = vertices.add(key, after);
     v.task = task;
     if (before) {
       if (typeof before === "string") {
-        vertices.addEdge(v, vertices.add(before));
+        vertices.addEdge(v, vertices.add(before, after));
       } else {
         for (let i = 0; i < before.length; i++) {
-          vertices.addEdge(v, vertices.add(before[i]));
+          vertices.addEdge(v, vertices.add(before[i], after));
         }
       }
     }
@@ -37,8 +37,8 @@ export default class DAG<T> {
     }
   }
 
-  public getResult(callback: Callback<T>) {
-    this._vertices.walk(callback);
+  public async getResult(callback: Callback<T>) {
+    return await this._vertices.walk(callback);
   }
 }
 
@@ -50,7 +50,7 @@ class Vertices<T> {
   private path: IntStack = new IntStack();
   public result: IntStack = new IntStack();
 
-  public add(key: string): Vertex<T> {
+  public add(key: string, dependencies?: any): Vertex<T> {
     if (!key) throw new Error("missing key");
     let l = this.length | 0;
     let vertex: Vertex<T>;
@@ -65,7 +65,8 @@ class Vertices<T> {
       task: undefined,
       out: false,
       flag: false,
-      length: 0
+      length: 0,
+      dependencies
     });
   }
 
@@ -80,14 +81,14 @@ class Vertices<T> {
     v.out = true;
   }
 
-  public walk(cb: Callback<T>): void {
+  public async walk(cb: Callback<T>): Promise<void> {
     this.reset();
     for (let i = 0; i < this.length; i++) {
       let vertex = this[i];
-      if (vertex.out) continue;
+      if (vertex.out || falirures[vertex.key]) continue;
       this.visit(vertex, "");
     }
-    this.each(this.result, cb);
+    await this.each(this.result, cb);
   }
 
   private check(v: Vertex<T>, w: string): void {
@@ -157,12 +158,55 @@ class Vertices<T> {
     }
   }
 
-  private each(indices: IntStack, cb: Callback<T>): void {
+  private async each(indices: IntStack, cb: Callback<T>): Promise<void> {
     for (let i = 0, l = indices.length; i < l; i++) {
       let vertex = this[indices[i]];
-      cb(vertex.key, vertex.task);
+      const taskResult = await resolveTask(vertex);
+      cb(vertex.key, taskResult?.value, taskResult?.status);
     }
   }
+}
+
+function getTaskInput(dependencies: string[]): any {
+  return dependencies.map((dependency: any) => taskResults[dependency]);
+}
+
+async function resolveTask(vertex: any): Promise<any> {
+  let taskResult;
+  let taskStatus;
+  const unresolvedDependencies = vertex.dependencies?.length ? vertex.dependencies.filter((dependency: string) => Object.keys(falirures).includes(dependency)) : false;
+  if (unresolvedDependencies.length) {
+    falirures[vertex.key] = {
+      status: 'skipped',
+      unresolvedDependencies
+    }
+    return {
+      value: undefined,
+      status: 'skipped'
+    };
+  }
+
+  try {
+    if (vertex.dependencies?.length) {
+      taskResult = await vertex.task.apply(null, getTaskInput(vertex.dependencies));
+    } else {
+      taskResult = await vertex.task();
+    }
+    taskStatus = 'success';
+    taskResults[vertex.key] = taskResult;
+  } catch (error) {
+    falirures[vertex.key] = {
+      status: 'failed',
+      reason: error
+    };
+
+    taskStatus = 'failed';
+  }
+
+  return {
+    value: taskResult,
+    status: taskStatus
+  };
 }
 
 /** @private */
@@ -174,6 +218,7 @@ interface Vertex<T> {
   flag: boolean;
   [index: number]: number;
   length: number;
+  dependencies: any;
 }
 
 /** @private */
@@ -239,14 +284,6 @@ async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
       ...tasksSorted.noDeps[task],
       before: tasksWithoutDependencies[index+1]
     };
-
-    try {
-      notDependantTasks[task].value = await notDependantTasks[task].task();
-      notDependantTasks[task].status = 'success';
-    } catch (error) {
-      notDependantTasks[task].reason = error;
-      notDependantTasks[task].status = 'failed';
-    }
   }
 
   return {
@@ -255,18 +292,26 @@ async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
   }
 };
 
+const falirures: any = {};
+const taskResults: any = {};
 export const runTasks = async (tasks: TaskDict): Promise<any> => {
   const graph = new DAG();
   const taskNames = Object.keys(tasks);
   const tasksOrdered = await setBeforeOrder(tasks);
-  console.log('tasksOrdered', tasksOrdered);
   for (let i = 0; i < taskNames.length; i++) {
     let name = taskNames[i];
+    if (tasksOrdered[name].dependencies.includes(name)) {
+      falirures[name] = {
+        status: 'skipped',
+        unresolvedDependencies: [name]
+      };
+
+      continue;
+    }
     graph.add(name, tasksOrdered[name].task, tasksOrdered[name].before, tasksOrdered[name].dependencies)
   }
 
-  graph.getResult((key, val) => console.log(`${key}: ${val}`));
-
+  console.log('1111', await graph.getResult((key, val, status) => console.log(`${key}: {val: ${val}, status: ${status}}`)));
 
   return {};
 };
@@ -274,7 +319,7 @@ export const runTasks = async (tasks: TaskDict): Promise<any> => {
 (async () => {
   const taskResults = await runTasks({
     a: {
-      dependencies: ['d'],
+      dependencies: [],
       task: () => Promise.resolve(4),
     },
     b: {
@@ -283,7 +328,7 @@ export const runTasks = async (tasks: TaskDict): Promise<any> => {
     },
     c: {
       dependencies: [],
-      task: () => Promise.resolve('hi c'),
+      task: () => Promise.resolve(5),
     },
     d: {
       dependencies: [],
@@ -294,7 +339,7 @@ export const runTasks = async (tasks: TaskDict): Promise<any> => {
       task: () => 'hi e'
     },
     f: {
-      dependencies: ['a'],
+      dependencies: ['f'],
       task: () => console.log('Should never run - "f" depends on itself.')
     }
   });
