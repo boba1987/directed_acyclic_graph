@@ -39,16 +39,16 @@ export default class DAG<T> {
       }
     } catch (e: any) {
       if (e?.message.includes('cycle detected')) {
-        faliures[key] = {
-          status: 'skipped',
-          unresolvedDependencies: [key]
+        failures[key] = {
+          status: 'skipped'
         }
       }
     }
   }
 
   public async getResult(): Promise<any> {
-    return await this._vertices.walk();
+    const result = await this._vertices.walk();
+    return result;
   }
 }
 
@@ -95,7 +95,7 @@ class Vertices<T> {
     this.reset();
     for (let i = 0; i < this.length; i++) {
       let vertex = this[i];
-      if (vertex.out || faliures[vertex.key]) continue;
+      if (vertex.out || failures[vertex.key]) continue;
       this.visit(vertex, "");
     }
     return this.each(this.result);
@@ -175,24 +175,45 @@ class Vertices<T> {
         value: taskResult?.value,
         status: taskResult?.status,
         unresolvedDependencies: taskResult?.unresolvedDependencies,
-        reason: taskResult?.reason
+        reason: taskResult?.reason,
+        dependencies: vertex.dependencies
       }
     }
-    return results;
+
+    return {
+      ...results,
+      ...populateUnresolvedDependencies(results, failures)
+    };
   }
 }
 
+function getUnresolvedDependencies(dependencies: string[]) {
+  return dependencies?.length ? dependencies.filter((dependency: string) => Object.keys(failures).includes(dependency)) : [];
+}
+
+function populateUnresolvedDependencies(results: any, failures: any): any{
+  return Object.keys(results).reduce((acc: any, curr: any)=> {
+    if (results[curr].status === 'skipped') {
+      const unresolvedDependencies = getUnresolvedDependencies(results[curr].dependencies);
+      acc[curr] = {
+        ...results[curr],
+        unresolvedDependencies
+      }
+    }
+    return acc;
+  }, {});
+}
+
 function getTaskInput(dependencies: string[]): any {
-  return dependencies.map((dependency: any) => taskResults[dependency]);
+  return dependencies.map((dependency: any) => taskResults[dependency])
 }
 
 async function resolveTask(vertex: any): Promise<any> {
   let taskResult;
   let taskStatus;
   let failureReason;
-  const unresolvedDependencies = vertex.dependencies?.length ? vertex.dependencies.filter((dependency: string) => Object.keys(faliures).includes(dependency)) : [];
-
-  if (faliures[vertex.key]) {
+  const unresolvedDependencies = getUnresolvedDependencies(vertex.dependencies);
+  if (failures[vertex.key]) {
     return {
       status: 'skipped',
       unresolvedDependencies
@@ -200,13 +221,11 @@ async function resolveTask(vertex: any): Promise<any> {
   }
 
   if (unresolvedDependencies.length) {
-    faliures[vertex.key] = {
-      status: 'skipped',
-      unresolvedDependencies
+    failures[vertex.key] = {
+      status: 'skipped'
     }
     return {
-      status: 'skipped',
-      unresolvedDependencies
+      status: 'skipped'
     };
   }
 
@@ -219,7 +238,7 @@ async function resolveTask(vertex: any): Promise<any> {
     taskStatus = 'resolved';
     taskResults[vertex.key] = taskResult;
   } catch (error) {
-    faliures[vertex.key] = {
+    failures[vertex.key] = {
       status: 'failed',
       reason: error
     };
@@ -318,7 +337,7 @@ async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
   }
 };
 
-const faliures: any = {};
+const failures: any = {};
 const taskResults: any = {};
 export const runTasks = async (tasks: TaskDict): Promise<any> => {
   const graph = new DAG();
@@ -362,26 +381,3 @@ function buildResponse(taskResults: any, tasksOriginalOrder: string[]): any {
     return acc;
   }, {});
 }
-
-(async () => {
-  const taskResults = await runTasks({
-    d: {
-      dependencies: ['c'],
-      task: () => null
-    },
-    a: {
-      dependencies: ['d'],
-      task: () => null
-    },
-    b: {
-      dependencies: ['a'],
-      task: () => null
-    },
-    c: {
-      dependencies: ['b'],
-      task: () => null
-    }
-  });
-  
-  console.log('taskResults', taskResults);
-})()
