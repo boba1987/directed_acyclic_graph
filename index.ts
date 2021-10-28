@@ -17,28 +17,38 @@ export default class DAG<T> {
     let vertices = this._vertices;
     let v = vertices.add(key, after);
     v.task = task;
-    if (before) {
-      if (typeof before === "string") {
-        vertices.addEdge(v, vertices.add(before, after));
-      } else {
-        for (let i = 0; i < before.length; i++) {
-          vertices.addEdge(v, vertices.add(before[i], after));
+    v.dependencies = after;
+    try {
+      if (before) {
+        if (typeof before === "string") {
+          vertices.addEdge(v, vertices.add(before, after));
+        } else {
+          for (let i = 0; i < before.length; i++) {
+            vertices.addEdge(v, vertices.add(before[i], after));
+          }
         }
       }
-    }
-    if (after) {
-      if (typeof after === "string") {
-        vertices.addEdge(vertices.add(after), v);
-      } else {
-        for (let i = 0; i < after.length; i++) {
-          vertices.addEdge(vertices.add(after[i]), v);
+      if (after) {
+        if (typeof after === "string") {
+          vertices.addEdge(vertices.add(after), v);
+        } else {
+          for (let i = 0; i < after.length; i++) {
+            vertices.addEdge(vertices.add(after[i]), v);
+          }
+        }
+      }
+    } catch (e: any) {
+      if (e?.message.includes('cycle detected')) {
+        faliures[key] = {
+          status: 'skipped',
+          unresolvedDependencies: [key]
         }
       }
     }
   }
 
-  public async getResult(callback: Callback<T>) {
-    return await this._vertices.walk(callback);
+  public async getResult(): Promise<any> {
+    return await this._vertices.walk();
   }
 }
 
@@ -81,14 +91,14 @@ class Vertices<T> {
     v.out = true;
   }
 
-  public async walk(cb: Callback<T>): Promise<void> {
+  public async walk(): Promise<any> {
     this.reset();
     for (let i = 0; i < this.length; i++) {
       let vertex = this[i];
-      if (vertex.out || falirures[vertex.key]) continue;
+      if (vertex.out || faliures[vertex.key]) continue;
       this.visit(vertex, "");
     }
-    await this.each(this.result, cb);
+    return this.each(this.result);
   }
 
   private check(v: Vertex<T>, w: string): void {
@@ -109,9 +119,7 @@ class Vertices<T> {
     this.visit(v, w);
     if (this.path.length > 0) {
       let msg = "cycle detected: " + w;
-      this.each(this.path, key => {
-        msg += " <- " + key;
-      });
+      msg += this.each(this.path);
       throw new Error(msg);
     }
   }
@@ -158,12 +166,19 @@ class Vertices<T> {
     }
   }
 
-  private async each(indices: IntStack, cb: Callback<T>): Promise<void> {
+  private async each(indices: IntStack): Promise<any> {
+    const results: any = {};
     for (let i = 0, l = indices.length; i < l; i++) {
       let vertex = this[indices[i]];
       const taskResult = await resolveTask(vertex);
-      cb(vertex.key, taskResult?.value, taskResult?.status);
+      results[vertex.key] = {
+        value: taskResult?.value,
+        status: taskResult?.status,
+        unresolvedDependencies: taskResult?.unresolvedDependencies,
+        reason: taskResult?.reason
+      }
     }
+    return results;
   }
 }
 
@@ -174,15 +189,24 @@ function getTaskInput(dependencies: string[]): any {
 async function resolveTask(vertex: any): Promise<any> {
   let taskResult;
   let taskStatus;
-  const unresolvedDependencies = vertex.dependencies?.length ? vertex.dependencies.filter((dependency: string) => Object.keys(falirures).includes(dependency)) : false;
+  let failureReason;
+  const unresolvedDependencies = vertex.dependencies?.length ? vertex.dependencies.filter((dependency: string) => Object.keys(faliures).includes(dependency)) : [];
+
+  if (faliures[vertex.key]) {
+    return {
+      status: 'skipped',
+      unresolvedDependencies
+    };
+  }
+
   if (unresolvedDependencies.length) {
-    falirures[vertex.key] = {
+    faliures[vertex.key] = {
       status: 'skipped',
       unresolvedDependencies
     }
     return {
-      value: undefined,
-      status: 'skipped'
+      status: 'skipped',
+      unresolvedDependencies
     };
   }
 
@@ -195,17 +219,19 @@ async function resolveTask(vertex: any): Promise<any> {
     taskStatus = 'success';
     taskResults[vertex.key] = taskResult;
   } catch (error) {
-    falirures[vertex.key] = {
+    faliures[vertex.key] = {
       status: 'failed',
       reason: error
     };
 
     taskStatus = 'failed';
+    failureReason = error;
   }
 
   return {
     value: taskResult,
-    status: taskStatus
+    status: taskStatus,
+    reason: failureReason
   };
 }
 
@@ -292,7 +318,7 @@ async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
   }
 };
 
-const falirures: any = {};
+const faliures: any = {};
 const taskResults: any = {};
 export const runTasks = async (tasks: TaskDict): Promise<any> => {
   const graph = new DAG();
@@ -300,49 +326,39 @@ export const runTasks = async (tasks: TaskDict): Promise<any> => {
   const tasksOrdered = await setBeforeOrder(tasks);
   for (let i = 0; i < taskNames.length; i++) {
     let name = taskNames[i];
-    if (tasksOrdered[name].dependencies.includes(name)) {
-      falirures[name] = {
-        status: 'skipped',
-        unresolvedDependencies: [name]
-      };
-
-      continue;
-    }
     graph.add(name, tasksOrdered[name].task, tasksOrdered[name].before, tasksOrdered[name].dependencies)
   }
 
-  console.log('1111', await graph.getResult((key, val, status) => console.log(`${key}: {val: ${val}, status: ${status}}`)));
-
-  return {};
+  return buildResponse(await graph.getResult(), Object.keys(tasks));
 };
 
-(async () => {
-  const taskResults = await runTasks({
-    a: {
-      dependencies: [],
-      task: () => Promise.resolve(4),
-    },
-    b: {
-      dependencies: ['a', 'c'],
-      task: async (a, c) => Math.sqrt(c * c - a * a)
-    },
-    c: {
-      dependencies: [],
-      task: () => Promise.resolve(5),
-    },
-    d: {
-      dependencies: [],
-      task: () => Promise.reject('hi d'),
-    },
-    e: {
-      dependencies: ['d', 'a', 'f'],
-      task: () => 'hi e'
-    },
-    f: {
-      dependencies: ['f'],
-      task: () => console.log('Should never run - "f" depends on itself.')
-    }
-  });
-  
-  console.log('taskResults', taskResults);
-})()
+function resolveResponseType(task: any): any {
+  switch (task.status) {
+    case 'success':
+      return {
+        value: task.value,
+        status: 'success'
+      };
+    case 'skipped':
+      return {
+        unresolvedDependencies: task.unresolvedDependencies,
+        status: 'skipped'
+      };
+    case 'failed':
+      return {
+        status: 'failed',
+        reason: task.reason
+      };
+    default:
+      return {
+        status: 'unknown'
+      };
+  }
+}
+
+function buildResponse(taskResults: any, tasksOriginalOrder: string[]): any {
+  return tasksOriginalOrder.reduce((acc: any, curr: any)=> {
+    acc[curr] = resolveResponseType(taskResults[curr]);
+    return acc;
+  }, {});
+}
