@@ -216,7 +216,7 @@ async function resolveTask(vertex: any): Promise<any> {
     } else {
       taskResult = await vertex.task();
     }
-    taskStatus = 'success';
+    taskStatus = 'resolved';
     taskResults[vertex.key] = taskResult;
   } catch (error) {
     faliures[vertex.key] = {
@@ -334,10 +334,10 @@ export const runTasks = async (tasks: TaskDict): Promise<any> => {
 
 function resolveResponseType(task: any): any {
   switch (task.status) {
-    case 'success':
+    case 'resolved':
       return {
         value: task.value,
-        status: 'success'
+        status: 'resolved'
       };
     case 'skipped':
       return {
@@ -362,3 +362,26 @@ function buildResponse(taskResults: any, tasksOriginalOrder: string[]): any {
     return acc;
   }, {});
 }
+
+(async () => {
+  const taskResults = await runTasks({
+    d: {
+      dependencies: ['c'],
+      task: () => null
+    },
+    a: {
+      dependencies: ['d'],
+      task: () => null
+    },
+    b: {
+      dependencies: ['a'],
+      task: () => null
+    },
+    c: {
+      dependencies: ['b'],
+      task: () => null
+    }
+  });
+  
+  console.log('taskResults', taskResults);
+})()
