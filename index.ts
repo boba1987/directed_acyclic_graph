@@ -9,6 +9,12 @@ interface Vertex<T> {
   dependencies: any;
 }
 
+enum TaskStatus {
+  Resolved = 'resolved',
+  Skipped = 'skipped',
+  Failed = 'failed'
+};
+
 interface Result {
   status: string;
   dependencies?: string[];
@@ -42,15 +48,15 @@ interface TaskDict {
 interface TaskResultDict {
   [taskId: string]: (
     {
-      status: 'resolved',
+      status: TaskStatus.Resolved,
       value: any
     } |
     {
-      status: 'failed',
+      status: TaskStatus.Failed,
       reason: any
     } |
     {
-      status: 'skipped',
+      status: TaskStatus.Skipped,
       unresolvedDependencies: string[]
     }
   );
@@ -94,7 +100,7 @@ class DAG<T> {
     } catch (error: any) {
       if (error?.message.includes('cycle detected')) {
         failures[key] = {
-          status: 'skipped'
+          status: TaskStatus.Skipped
         }
       }
     }
@@ -251,7 +257,7 @@ function getUnresolvedDependencies(dependencies: string[], failures: Failures) {
 
 function populateUnresolvedDependencies(results: any, failures: Failures): TaskResult {
   return Object.keys(results).reduce((acc: any | {}, curr: string)=> {
-    if (results[curr].status === 'skipped') {
+    if (results[curr].status === TaskStatus.Skipped) {
       const unresolvedDependencies = getUnresolvedDependencies(results[curr].dependencies, failures);
       acc[curr] = {
         ...results[curr],
@@ -273,17 +279,17 @@ async function resolveTask(vertex: Vertex<any>): Promise<Result> {
   const unresolvedDependencies = getUnresolvedDependencies(vertex.dependencies, failures);
   if (failures[vertex.key]) {
     return {
-      status: 'skipped',
+      status: TaskStatus.Skipped,
       unresolvedDependencies
     };
   }
 
   if (unresolvedDependencies.length) {
     failures[vertex.key] = {
-      status: 'skipped'
+      status: TaskStatus.Skipped
     }
     return {
-      status: 'skipped'
+      status: TaskStatus.Skipped
     };
   }
 
@@ -293,15 +299,15 @@ async function resolveTask(vertex: Vertex<any>): Promise<Result> {
     } else {
       taskResult = await vertex.task();
     }
-    taskStatus = 'resolved';
+    taskStatus = TaskStatus.Resolved;
     taskResults[vertex.key] = taskResult;
   } catch (error: any) {
     failures[vertex.key] = {
-      status: 'failed',
+      status: TaskStatus.Failed,
       reason: error
     };
 
-    taskStatus = 'failed';
+    taskStatus = TaskStatus.Failed;
     failureReason = error;
   }
 
@@ -359,19 +365,19 @@ async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
 
 function resolveResponseType(task: any): any {
   switch (task.status) {
-    case 'resolved':
+    case TaskStatus.Resolved:
       return {
         value: task.value,
-        status: 'resolved'
+        status: TaskStatus.Resolved
       };
-    case 'skipped':
+    case TaskStatus.Skipped:
       return {
         unresolvedDependencies: task.unresolvedDependencies,
-        status: 'skipped'
+        status: TaskStatus.Skipped
       };
-    case 'failed':
+    case TaskStatus.Failed:
       return {
-        status: 'failed',
+        status: TaskStatus.Failed,
         reason: task.reason
       };
     default:
