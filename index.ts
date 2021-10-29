@@ -62,11 +62,10 @@ interface TaskResultDict {
   );
 }
 
-const failures: Failures = {};
-const taskResults: any = {};
-
 class DAG<T> {
-  private _vertices = new Vertices<T>();
+  private failures: Failures = {};
+  private taskResults: any = {};
+  private _vertices = new Vertices<T>(this.failures, this.taskResults);
 
   public add(
     key: string,
@@ -99,7 +98,7 @@ class DAG<T> {
       }
     } catch (error: any) {
       if (error?.message.includes('cycle detected')) {
-        failures[key] = {
+        this.failures[key] = {
           status: TaskStatus.Skipped
         }
       }
@@ -115,6 +114,13 @@ class DAG<T> {
 class Vertices<T> {
   [index: number]: Vertex<T>;
   length = 0;
+  taskResults;
+  failures;
+
+  constructor(failures: Failures, taskResults: TaskResult) {
+    this.failures = failures;
+    this.taskResults = taskResults;
+  }
 
   private stack: IntStack = new IntStack();
   private path: IntStack = new IntStack();
@@ -155,7 +161,7 @@ class Vertices<T> {
     this.reset();
     for (let i = 0; i < this.length; i++) {
       let vertex = this[i];
-      if (vertex.out || failures[vertex.key]) continue;
+      if (vertex.out || this.failures[vertex.key]) continue;
       this.visit(vertex, "");
     }
     const result = await this.each(this.result, true);
@@ -233,7 +239,7 @@ class Vertices<T> {
       let vertex = this[indices[i]];
       let taskResult;
       if (tryTask) {
-        taskResult = await resolveTask(vertex);
+        taskResult = await resolveTask(vertex, this.taskResults, this.failures);
       }
       results[vertex.key] = {
         value: taskResult?.value,
@@ -246,7 +252,7 @@ class Vertices<T> {
 
     return {
       ...results,
-      ...populateUnresolvedDependencies(results, failures)
+      ...populateUnresolvedDependencies(results, this.failures)
     };
   }
 }
@@ -268,11 +274,11 @@ function populateUnresolvedDependencies(results: any, failures: Failures): TaskR
   }, {});
 }
 
-function getTaskInput(dependencies: string[]): string[] {
+function getTaskInput(dependencies: string[], taskResults: any): string[] {
   return dependencies.map((dependency: string) => taskResults[dependency])
 }
 
-async function resolveTask(vertex: Vertex<any>): Promise<Result> {
+async function resolveTask(vertex: Vertex<any>, taskResults: TaskResult, failures: Failures): Promise<Result> {
   let taskResult;
   let taskStatus;
   let failureReason;
@@ -295,7 +301,7 @@ async function resolveTask(vertex: Vertex<any>): Promise<Result> {
 
   try {
     if (vertex.dependencies?.length) {
-      taskResult = await vertex.task.apply(null, getTaskInput(vertex.dependencies));
+      taskResult = await vertex.task.apply(null, getTaskInput(vertex.dependencies, taskResults));
     } else {
       taskResult = await vertex.task();
     }
