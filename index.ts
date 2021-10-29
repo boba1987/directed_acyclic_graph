@@ -68,32 +68,31 @@ class DAG<T> {
     before?: MaybeStringOrArray,
     dependencies?: MaybeStringOrArray
   ) {
-    if (!key) throw new Error("argument `key` is required");
     let vertices = this._vertices;
-    let v = vertices.add(key, dependencies);
-    v.task = task;
-    v.dependencies = dependencies;
+    let verticy = vertices.add(key, dependencies);
+    verticy.task = task;
+    verticy.dependencies = dependencies;
     try {
       if (before) {
         if (typeof before === "string") {
-          vertices.addEdge(v, vertices.add(before, dependencies));
+          vertices.addEdge(verticy, vertices.add(before, dependencies));
         } else {
           for (let i = 0; i < before.length; i++) {
-            vertices.addEdge(v, vertices.add(before[i], dependencies));
+            vertices.addEdge(verticy, vertices.add(before[i], dependencies));
           }
         }
       }
       if (dependencies) {
         if (typeof dependencies === "string") {
-          vertices.addEdge(vertices.add(dependencies), v);
+          vertices.addEdge(vertices.add(dependencies), verticy);
         } else {
           for (let i = 0; i < dependencies.length; i++) {
-            vertices.addEdge(vertices.add(dependencies[i]), v);
+            vertices.addEdge(vertices.add(dependencies[i]), verticy);
           }
         }
       }
-    } catch (e: any) {
-      if (e?.message.includes('cycle detected')) {
+    } catch (error: any) {
+      if (error?.message.includes('cycle detected')) {
         failures[key] = {
           status: 'skipped'
         }
@@ -117,15 +116,15 @@ class Vertices<T> {
 
   public add(key: string, dependencies?: string | string[]): Vertex<T> {
     if (!key) throw new Error("missing key");
-    let l = this.length | 0;
+    let length = this.length | 0;
     let vertex: Vertex<T>;
-    for (let i = 0; i < l; i++) {
+    for (let i = 0; i < length; i++) {
       vertex = this[i];
       if (vertex.key === key) return vertex;
     }
-    this.length = l + 1;
-    return (this[l] = {
-      idx: l,
+    this.length = length + 1;
+    return (this[length] = {
+      idx: length,
       key: key,
       task: undefined,
       out: false,
@@ -135,15 +134,15 @@ class Vertices<T> {
     });
   }
 
-  public addEdge(v: Vertex<T>, w: Vertex<T>): void {
-    this.check(v, w.key);
-    let l = w.length | 0;
+  public addEdge(verticy: Vertex<T>, path: Vertex<T>): void {
+    this.check(verticy, path.key);
+    let l = path.length | 0;
     for (let i = 0; i < l; i++) {
-      if (w[i] === v.idx) return;
+      if (path[i] === verticy.idx) return;
     }
-    w.length = l + 1;
-    w[l] = v.idx;
-    v.out = true;
+    path.length = l + 1;
+    path[l] = verticy.idx;
+    verticy.out = true;
   }
 
   public async walk(): Promise<TaskResult> {
@@ -157,24 +156,24 @@ class Vertices<T> {
     return result;
   }
 
-  private check(v: Vertex<T>, w: string): void {
-    if (v.key === w) {
-      throw new Error("cycle detected: " + w + " <- " + w);
+  private check(verticy: Vertex<T>, path: string): void {
+    if (verticy.key === path) {
+      throw new Error("cycle detected: " + path + " <- " + path);
     }
     // quick check
-    if (v.length === 0) return;
+    if (verticy.length === 0) return;
     // shallow check
-    for (let i = 0; i < v.length; i++) {
-      let key = this[v[i]].key;
-      if (key === w) {
-        throw new Error("cycle detected: " + w + " <- " + v.key + " <- " + w);
+    for (let i = 0; i < verticy.length; i++) {
+      let key = this[verticy[i]].key;
+      if (key === path) {
+        throw new Error("cycle detected: " + path + " <- " + verticy.key + " <- " + path);
       }
     }
     // deep check
     this.reset();
-    this.visit(v, w);
+    this.visit(verticy, path);
     if (this.path.length > 0) {
-      let msg = "cycle detected: " + w;
+      let msg = "cycle detected: " + path;
       msg += this.each(this.path, false);
       throw new Error(msg);
     }
