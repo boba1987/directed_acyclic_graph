@@ -1,39 +1,94 @@
-export interface Callback<T> {
-  (key: string, value: T | undefined, status: string | undefined): void;
+interface Vertex<T> {
+  idx: number;
+  key: string;
+  task: T | undefined;
+  out: boolean;
+  flag: boolean;
+  [index: number]: number;
+  length: number;
+  dependencies: any;
 }
 
-export type MaybeStringOrArray = string | string[] | undefined;
+interface Result {
+  status: string;
+  dependencies?: string[];
+  reason?: string;
+  unresolvedDependencies?: string[];
+  value?: string
+}
 
-export default class DAG<T> {
+interface TaskResult {
+  [key: string]: Result
+};
+
+type MaybeStringOrArray = string | string[] | undefined;
+
+interface Failures {
+  [key: string]: {
+    status: string;
+    reason?: string;
+
+  }
+};
+
+interface TaskDict {
+  [taskId: string]: {
+    dependencies: string[]; // an array of task ids.
+    task: (...dependencyResults: any[]) => any;
+    before?: string;
+    after?: string
+  }
+}
+interface TaskResultDict {
+  [taskId: string]: (
+    {
+      status: 'resolved',
+      value: any
+    } |
+    {
+      status: 'failed',
+      reason: any
+    } |
+    {
+      status: 'skipped',
+      unresolvedDependencies: string[]
+    }
+  );
+}
+
+const failures: Failures = {};
+const taskResults: any = {};
+
+class DAG<T> {
   private _vertices = new Vertices<T>();
 
   public add(
     key: string,
     task: T | undefined,
     before?: MaybeStringOrArray,
-    after?: MaybeStringOrArray
+    dependencies?: MaybeStringOrArray
   ) {
     if (!key) throw new Error("argument `key` is required");
     let vertices = this._vertices;
-    let v = vertices.add(key, after);
+    let v = vertices.add(key, dependencies);
     v.task = task;
-    v.dependencies = after;
+    v.dependencies = dependencies;
     try {
       if (before) {
         if (typeof before === "string") {
-          vertices.addEdge(v, vertices.add(before, after));
+          vertices.addEdge(v, vertices.add(before, dependencies));
         } else {
           for (let i = 0; i < before.length; i++) {
-            vertices.addEdge(v, vertices.add(before[i], after));
+            vertices.addEdge(v, vertices.add(before[i], dependencies));
           }
         }
       }
-      if (after) {
-        if (typeof after === "string") {
-          vertices.addEdge(vertices.add(after), v);
+      if (dependencies) {
+        if (typeof dependencies === "string") {
+          vertices.addEdge(vertices.add(dependencies), v);
         } else {
-          for (let i = 0; i < after.length; i++) {
-            vertices.addEdge(vertices.add(after[i]), v);
+          for (let i = 0; i < dependencies.length; i++) {
+            vertices.addEdge(vertices.add(dependencies[i]), v);
           }
         }
       }
@@ -46,7 +101,7 @@ export default class DAG<T> {
     }
   }
 
-  public async getResult(): Promise<any> {
+  public async getResult(): Promise<TaskResult> {
     const result = await this._vertices.walk();
     return result;
   }
@@ -60,7 +115,7 @@ class Vertices<T> {
   private path: IntStack = new IntStack();
   public result: IntStack = new IntStack();
 
-  public add(key: string, dependencies?: any): Vertex<T> {
+  public add(key: string, dependencies?: string | string[]): Vertex<T> {
     if (!key) throw new Error("missing key");
     let l = this.length | 0;
     let vertex: Vertex<T>;
@@ -91,14 +146,15 @@ class Vertices<T> {
     v.out = true;
   }
 
-  public async walk(): Promise<any> {
+  public async walk(): Promise<TaskResult> {
     this.reset();
     for (let i = 0; i < this.length; i++) {
       let vertex = this[i];
       if (vertex.out || failures[vertex.key]) continue;
       this.visit(vertex, "");
     }
-    return this.each(this.result, true);
+    const result = await this.each(this.result, true);
+    return result;
   }
 
   private check(v: Vertex<T>, w: string): void {
@@ -166,8 +222,8 @@ class Vertices<T> {
     }
   }
 
-  private async each(indices: IntStack, tryTask: boolean): Promise<any> {
-    const results: any = {};
+  private async each(indices: IntStack, tryTask: boolean): Promise<TaskResult> {
+    const results: TaskResult = {};
     for (let i = 0, l = indices.length; i < l; i++) {
       let vertex = this[indices[i]];
       let taskResult;
@@ -180,7 +236,7 @@ class Vertices<T> {
         unresolvedDependencies: taskResult?.unresolvedDependencies,
         reason: taskResult?.reason,
         dependencies: vertex.dependencies
-      }
+      } as Result
     }
 
     return {
@@ -190,14 +246,14 @@ class Vertices<T> {
   }
 }
 
-function getUnresolvedDependencies(dependencies: string[]) {
+function getUnresolvedDependencies(dependencies: string[], failures: Failures) {
   return dependencies?.length ? dependencies.filter((dependency: string) => Object.keys(failures).includes(dependency)) : [];
 }
 
-function populateUnresolvedDependencies(results: any, failures: any): any{
-  return Object.keys(results).reduce((acc: any, curr: any)=> {
+function populateUnresolvedDependencies(results: any, failures: Failures): TaskResult {
+  return Object.keys(results).reduce((acc: any | {}, curr: string)=> {
     if (results[curr].status === 'skipped') {
-      const unresolvedDependencies = getUnresolvedDependencies(results[curr].dependencies);
+      const unresolvedDependencies = getUnresolvedDependencies(results[curr].dependencies, failures);
       acc[curr] = {
         ...results[curr],
         unresolvedDependencies
@@ -207,15 +263,15 @@ function populateUnresolvedDependencies(results: any, failures: any): any{
   }, {});
 }
 
-function getTaskInput(dependencies: string[]): any {
-  return dependencies.map((dependency: any) => taskResults[dependency])
+function getTaskInput(dependencies: string[]): string[] {
+  return dependencies.map((dependency: string) => taskResults[dependency])
 }
 
-async function resolveTask(vertex: any): Promise<any> {
+async function resolveTask(vertex: Vertex<any>): Promise<Result> {
   let taskResult;
   let taskStatus;
   let failureReason;
-  const unresolvedDependencies = getUnresolvedDependencies(vertex.dependencies);
+  const unresolvedDependencies = getUnresolvedDependencies(vertex.dependencies, failures);
   if (failures[vertex.key]) {
     return {
       status: 'skipped',
@@ -240,7 +296,7 @@ async function resolveTask(vertex: any): Promise<any> {
     }
     taskStatus = 'resolved';
     taskResults[vertex.key] = taskResult;
-  } catch (error) {
+  } catch (error: any) {
     failures[vertex.key] = {
       status: 'failed',
       reason: error
@@ -257,19 +313,6 @@ async function resolveTask(vertex: any): Promise<any> {
   };
 }
 
-/** @private */
-interface Vertex<T> {
-  idx: number;
-  key: string;
-  task: T | undefined;
-  out: boolean;
-  flag: boolean;
-  [index: number]: number;
-  length: number;
-  dependencies: any;
-}
-
-/** @private */
 class IntStack {
   [index: number]: number;
 
@@ -282,31 +325,6 @@ class IntStack {
   pop() {
     return this[--this.length] | 0;
   }
-}
-
-interface TaskDict {
-  [taskId: string]: {
-    dependencies: string[]; // an array of task ids.
-    task: (...dependencyResults: any[]) => any;
-    before?: string;
-    after?: string
-  }
-}
-interface TaskResultDict {
-  [taskId: string]: (
-    {
-      status: 'resolved',
-      value: any
-    } |
-    {
-      status: 'failed',
-      reason: any
-    } |
-    {
-      status: 'skipped',
-      unresolvedDependencies: string[]
-    }
-  );
 }
 
 async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
@@ -340,8 +358,6 @@ async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
   }
 };
 
-const failures: any = {};
-const taskResults: any = {};
 function resolveResponseType(task: any): any {
   switch (task.status) {
     case 'resolved':
@@ -366,14 +382,14 @@ function resolveResponseType(task: any): any {
   }
 }
 
-function buildResponse(taskResults: any, tasksOriginalOrder: string[]): any {
-  return tasksOriginalOrder.reduce((acc: any, curr: any)=> {
+function buildResponse(taskResults: TaskResult, tasksOriginalOrder: string[]): TaskResultDict {
+  return tasksOriginalOrder.reduce((acc: any, curr: string)=> {
     acc[curr] = resolveResponseType(taskResults[curr]);
     return acc;
   }, {});
 }
 
-export const runTasks = async (tasks: TaskDict): Promise<any> => {
+export const runTasks = async (tasks: TaskDict): Promise<TaskResultDict> => {
   const graph = new DAG();
   const taskNames = Object.keys(tasks);
   const tasksOrdered = await setBeforeOrder(tasks);
