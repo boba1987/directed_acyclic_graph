@@ -98,7 +98,7 @@ class Vertices<T> {
       if (vertex.out || failures[vertex.key]) continue;
       this.visit(vertex, "");
     }
-    return this.each(this.result);
+    return this.each(this.result, true);
   }
 
   private check(v: Vertex<T>, w: string): void {
@@ -119,7 +119,7 @@ class Vertices<T> {
     this.visit(v, w);
     if (this.path.length > 0) {
       let msg = "cycle detected: " + w;
-      msg += this.each(this.path);
+      msg += this.each(this.path, false);
       throw new Error(msg);
     }
   }
@@ -166,11 +166,14 @@ class Vertices<T> {
     }
   }
 
-  private async each(indices: IntStack): Promise<any> {
+  private async each(indices: IntStack, tryTask: boolean): Promise<any> {
     const results: any = {};
     for (let i = 0, l = indices.length; i < l; i++) {
       let vertex = this[indices[i]];
-      const taskResult = await resolveTask(vertex);
+      let taskResult;
+      if (tryTask) {
+        taskResult = await resolveTask(vertex);
+      }
       results[vertex.key] = {
         value: taskResult?.value,
         status: taskResult?.status,
@@ -339,18 +342,6 @@ async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
 
 const failures: any = {};
 const taskResults: any = {};
-export const runTasks = async (tasks: TaskDict): Promise<any> => {
-  const graph = new DAG();
-  const taskNames = Object.keys(tasks);
-  const tasksOrdered = await setBeforeOrder(tasks);
-  for (let i = 0; i < taskNames.length; i++) {
-    let name = taskNames[i];
-    graph.add(name, tasksOrdered[name].task, tasksOrdered[name].before, tasksOrdered[name].dependencies)
-  }
-
-  return buildResponse(await graph.getResult(), Object.keys(tasks));
-};
-
 function resolveResponseType(task: any): any {
   switch (task.status) {
     case 'resolved':
@@ -381,3 +372,15 @@ function buildResponse(taskResults: any, tasksOriginalOrder: string[]): any {
     return acc;
   }, {});
 }
+
+export const runTasks = async (tasks: TaskDict): Promise<any> => {
+  const graph = new DAG();
+  const taskNames = Object.keys(tasks);
+  const tasksOrdered = await setBeforeOrder(tasks);
+  for (let i = 0; i < taskNames.length; i++) {
+    let name = taskNames[i];
+    graph.add(name, tasksOrdered[name].task, tasksOrdered[name].before, tasksOrdered[name].dependencies)
+  }
+
+  return buildResponse(await graph.getResult(), Object.keys(tasks));
+};
