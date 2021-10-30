@@ -1,6 +1,6 @@
 import {describe, it, expect} from '@jest/globals';
 import {runTasks} from '..';
-jest.setTimeout(210 * 1000);
+
 describe('runTasks()', () => {
   it('should run tasks that do not depend on each other simultaneously', async () => {
     const callCounts = {};
