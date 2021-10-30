@@ -235,19 +235,39 @@ class Vertices<T> {
 
   private async each(indices: IntStack, tryTask: boolean): Promise<TaskResult> {
     const results: TaskResult = {};
-    for (let i = 0, l = indices.length; i < l; i++) {
-      let vertex = this[indices[i]];
-      let taskResult;
-      if (tryTask) {
-        taskResult = await resolveTask(vertex, this.taskResults, this.failures);
+    const independentTasksKeys: string[] = [];
+    const independentTasks = Object.values(indices).reduce((acc: any, curr: any, index: any)=> {
+      if (this[curr]?.dependencies && !this[curr]?.dependencies?.length) {
+        acc.push(resolveTask(this[curr], this.taskResults, this.failures));
+        independentTasksKeys.push(this[curr].key);
+        delete indices[index];
+        indices.length--
       }
-      results[vertex.key] = {
-        value: taskResult?.value,
-        status: taskResult?.status,
-        unresolvedDependencies: taskResult?.unresolvedDependencies,
-        reason: taskResult?.reason,
-        dependencies: vertex.dependencies
-      } as Result
+      return acc;
+    }, []);
+    
+    const independentTasksResults = await Promise.all(independentTasks);
+
+    const indicieKeys = Object.values(indices).slice(0, Object.values(indices).length-1);
+    for (let i=0; i<indicieKeys.length; i++) {
+      if (this[indicieKeys[i]]?.dependencies) {
+        let vertex = this[indicieKeys[i]];
+        let taskResult;
+        if (tryTask) {
+          taskResult = await resolveTask(vertex, this.taskResults, this.failures);
+        }
+        results[vertex.key] = {
+          value: taskResult?.value,
+          status: taskResult?.status,
+          unresolvedDependencies: taskResult?.unresolvedDependencies,
+          reason: taskResult?.reason,
+          dependencies: vertex.dependencies
+        } as Result
+      }
+    }
+
+    for (let i=0; i<independentTasksKeys.length; i++) {
+      results[independentTasksKeys[i]] = independentTasksResults[i] as Result;
     }
 
     return {
