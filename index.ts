@@ -236,7 +236,7 @@ class Vertices<T> {
   private async each(indices: IntStack, tryTask: boolean): Promise<TaskResult> {
     const results: TaskResult = {};
     const independentTasksKeys: string[] = [];
-    const independentTasks = Object.values(indices).reduce((acc: any, curr: any, index: any)=> {
+    const independentTasks = Object.values(indices).reduce((acc: any[], curr: number, index: number)=> {
       if (this[curr]?.dependencies && !this[curr]?.dependencies?.length) {
         acc.push(resolveTask(this[curr], this.taskResults, this.failures));
         independentTasksKeys.push(this[curr].key);
