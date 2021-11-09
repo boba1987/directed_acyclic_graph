@@ -100,15 +100,3 @@ deepStrictEqual(taskResults, {
 ### Run Tests
 
 `yarn test` or `yarn test --watch` (or `npm run test` or `npm run test -- --watch`).
-
-You can ignore TypeScript errors if you have any.
-
-### JavaScript vs TypeScript
-
-If you prefer JavaScript over TypeScript, just rename `intex.ts` to `index.js` and replace its content with:
-
-```javascript
-export const runTasks = (tasks) => {
-  // TODO
-};
-```
