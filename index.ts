@@ -236,7 +236,7 @@ class Vertices<T> {
   private async each(indices: IntStack, tryTask: boolean): Promise<TaskResult> {
     const results: TaskResult = {};
     const independentTasksKeys: string[] = [];
-    const independentTasks = Object.values(indices).reduce((acc: any[], curr: number, index: number)=> {
+    const independentTasks = Object.values(indices).reduce((acc: Promise<Result>[], curr: number, index: number)=> {
       if (this[curr]?.dependencies && !this[curr]?.dependencies?.length) {
         acc.push(resolveTask(this[curr], this.taskResults, this.failures));
         independentTasksKeys.push(this[curr].key);
@@ -358,7 +358,7 @@ class IntStack {
   }
 }
 
-async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
+async function setBeforeOrder (tasks: TaskDict):  Promise<TaskDict> {
   const tasksSorted = Object.keys(tasks).reduce((acc: any, curr: any) => {
     if (tasks[curr].dependencies.length) {
       acc.withDeps[curr] = tasks[curr];
@@ -373,7 +373,7 @@ async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
   });
 
   const tasksWithoutDependencies = Object.keys(tasksSorted.noDeps);
-  const notDependantTasks: any = {};
+  const notDependantTasks: TaskDict = {};
 
   for (let index=0; index < tasksWithoutDependencies.length; index++) {
     let task = tasksWithoutDependencies[index];
@@ -389,7 +389,7 @@ async function setBeforeOrder (tasks: TaskDict):  Promise<any> {
   }
 };
 
-function resolveResponseType(task: any): any {
+function resolveResponseType(task: Result): any {
   switch (task.status) {
     case TaskStatus.Resolved:
       return {
